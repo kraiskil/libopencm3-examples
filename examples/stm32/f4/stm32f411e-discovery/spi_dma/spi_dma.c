@@ -51,23 +51,27 @@ int _write(int file, char *ptr, int len);
 
 static void clock_setup(void)
 {
-	rcc_clock_setup_in_hse_12mhz_out_72mhz();
+	/* Set device clocks from opencm3 provided preset.*/
+	const struct rcc_clock_scale *clocks = &rcc_hsi_configs[RCC_CLOCK_3V3_84MHZ];
+	rcc_clock_setup_pll( clocks );
 
-	/* Enable GPIOA, GPIOB, GPIOC clock. */
+	/* Enable GPIO clocks:
+	 * GPIOA: SPI, USART
+	 * GPIOD: LEDS */
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOB);
 	rcc_periph_clock_enable(RCC_GPIOC);
+	rcc_periph_clock_enable(RCC_GPIOD);
 
 	/* Enable clocks for GPIO port A (for GPIO_USART2_TX) and USART2. */
 	rcc_periph_clock_enable(RCC_GPIOA);
-	rcc_periph_clock_enable(RCC_AFIO);
 	rcc_periph_clock_enable(RCC_USART2);
 
 	/* Enable SPI1 Periph and gpio clocks */
 	rcc_periph_clock_enable(RCC_SPI1);
 
-	/* Enable DMA1 clock */
-	rcc_periph_clock_enable(RCC_DMA1);
+	/* Enable DMA2 clock */
+	rcc_periph_clock_enable(RCC_DMA2);
 }
 
 static void spi_setup(void) {
@@ -75,13 +79,10 @@ static void spi_setup(void) {
 	/* Configure GPIOs: SS=PA4, SCK=PA5, MISO=PA6 and MOSI=PA7
 	 * For now ignore the SS pin so we can use it to time the ISRs
 	 */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ,
-            GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, /* GPIO4 | */
-            								GPIO5 |
-                                            GPIO7 );
+	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO5|GPIO7);
+	gpio_set_output_options(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO5|GPIO7);
 
-	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT,
-			GPIO6);
+	gpio_mode_setup(GPIOA, GPIO_MODE_INPUT, GPIO_PUPD_NONE, GPIO6);
 
 	/* Reset SPI, SPI_CR1 register cleared, SPI is disabled */
 	spi_reset(SPI1);
@@ -120,24 +121,17 @@ static void spi_setup(void) {
 }
 
 static void dma_int_enable(void) {
-	/* SPI1 RX on DMA1 Channel 2 */
- 	nvic_set_priority(NVIC_DMA1_CHANNEL2_IRQ, 0);
-	nvic_enable_irq(NVIC_DMA1_CHANNEL2_IRQ);
-	/* SPI1 TX on DMA1 Channel 3 */
-	nvic_set_priority(NVIC_DMA1_CHANNEL3_IRQ, 0);
-	nvic_enable_irq(NVIC_DMA1_CHANNEL3_IRQ);
+	/* SPI1 RX on DMA2 Stream 0, Channel 3 */
+	nvic_set_priority(NVIC_DMA2_STREAM0_IRQ, 0);
+	nvic_enable_irq(NVIC_DMA2_STREAM0_IRQ);
+	/* SPI1 TX on DMA2 Stream2, Channel 2 */
+	nvic_set_priority(NVIC_DMA2_STREAM2_IRQ, 0);
+	nvic_enable_irq(NVIC_DMA2_STREAM2_IRQ);
 }
-
-/* Not used in this example
-static void dma_int_disable(void) {
- 	nvic_disable_irq(NVIC_DMA1_CHANNEL2_IRQ);
- 	nvic_disable_irq(NVIC_DMA1_CHANNEL3_IRQ);
-}
-*/
 
 static void dma_setup(void)
 {
-	dma_int_enable();	
+	dma_int_enable();
 }
 
 #if USE_16BIT_TRANSFERS
@@ -153,8 +147,8 @@ static int spi_dma_transceive(uint8_t *tx_buf, int tx_len, uint8_t *rx_buf, int 
 	}
 
 	/* Reset DMA channels*/
-	dma_channel_reset(DMA1, DMA_CHANNEL2);
-	dma_channel_reset(DMA1, DMA_CHANNEL3);
+	dma_stream_reset(DMA2, DMA_STREAM0);
+	dma_stream_reset(DMA2, DMA_STREAM2);
 
 	/* Reset SPI data and status registers.
 	 * Here we assume that the SPI peripheral is NOT
@@ -177,52 +171,52 @@ static int spi_dma_transceive(uint8_t *tx_buf, int tx_len, uint8_t *rx_buf, int 
 
 	/* Set up rx dma, note it has higher priority to avoid overrun */
 	if (rx_len > 0) {
-		dma_set_peripheral_address(DMA1, DMA_CHANNEL2, (uint32_t)&SPI1_DR);
-		dma_set_memory_address(DMA1, DMA_CHANNEL2, (uint32_t)rx_buf);
-		dma_set_number_of_data(DMA1, DMA_CHANNEL2, rx_len);
-		dma_set_read_from_peripheral(DMA1, DMA_CHANNEL2);
-		dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL2);
+		dma_set_peripheral_address(DMA2, DMA_STREAM0, (uint32_t)&SPI1_DR);
+		dma_set_memory_address(DMA2, DMA_STREAM0, (uint32_t)rx_buf);
+		dma_set_number_of_data(DMA2, DMA_STREAM0, rx_len);
+		dma_set_transfer_mode(DMA2, DMA_STREAM0, DMA_SxCR_DIR_PERIPHERAL_TO_MEM);
+		dma_enable_memory_increment_mode(DMA2, DMA_STREAM0);
 #if USE_16BIT_TRANSFERS
-		dma_set_peripheral_size(DMA1, DMA_CHANNEL2, DMA_CCR_PSIZE_16BIT);
-		dma_set_memory_size(DMA1, DMA_CHANNEL2, DMA_CCR_MSIZE_16BIT);
+		dma_set_peripheral_size(DMA2, DMA_STREAM0, DMA_SxCR_PSIZE_16BIT);
+		dma_set_memory_size(DMA2, DMA_STREAM0, DMA_SxCR_MSIZE_16BIT);
 #else
-		dma_set_peripheral_size(DMA1, DMA_CHANNEL2, DMA_CCR_PSIZE_8BIT);
-		dma_set_memory_size(DMA1, DMA_CHANNEL2, DMA_CCR_MSIZE_8BIT);
+		dma_set_peripheral_size(DMA2, DMA_STREAM0, DMA_SxCR_PSIZE_8BIT);
+		dma_set_memory_size(DMA2, DMA_STREAM0, DMA_SxCR_MSIZE_8BIT);
 #endif
-		dma_set_priority(DMA1, DMA_CHANNEL2, DMA_CCR_PL_VERY_HIGH);
+		dma_set_priority(DMA2, DMA_STREAM0, DMA_SxCR_PL_VERY_HIGH);
 	}
 
 	/* Set up tx dma */
 	if (tx_len > 0) {
-		dma_set_peripheral_address(DMA1, DMA_CHANNEL3, (uint32_t)&SPI1_DR);
-		dma_set_memory_address(DMA1, DMA_CHANNEL3, (uint32_t)tx_buf);
-		dma_set_number_of_data(DMA1, DMA_CHANNEL3, tx_len);
-		dma_set_read_from_memory(DMA1, DMA_CHANNEL3);
-		dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL3);
+		dma_set_peripheral_address(DMA2, DMA_STREAM2, (uint32_t)&SPI1_DR);
+		dma_set_memory_address(DMA2, DMA_STREAM2, (uint32_t)tx_buf);
+		dma_set_number_of_data(DMA2, DMA_STREAM2, tx_len);
+		dma_set_transfer_mode(DMA2, DMA_STREAM2, DMA_SxCR_DIR_MEM_TO_PERIPHERAL);
+		dma_enable_memory_increment_mode(DMA2, DMA_STREAM2);
 #if USE_16BIT_TRANSFERS
-		dma_set_peripheral_size(DMA1, DMA_CHANNEL3, DMA_CCR_PSIZE_16BIT);
-		dma_set_memory_size(DMA1, DMA_CHANNEL3, DMA_CCR_MSIZE_16BIT);
+		dma_set_peripheral_size(DMA2, DMA_STREAM2, DMA_SxCR_PSIZE_16BIT);
+		dma_set_memory_size(DMA2, DMA_STREAM2, DMA_SxCR_MSIZE_16BIT);
 #else
-		dma_set_peripheral_size(DMA1, DMA_CHANNEL3, DMA_CCR_PSIZE_8BIT);
-		dma_set_memory_size(DMA1, DMA_CHANNEL3, DMA_CCR_MSIZE_8BIT);
+		dma_set_peripheral_size(DMA2, DMA_STREAM2, DMA_CCR_PSIZE_8BIT);
+		dma_set_memory_size(DMA2, DMA_STREAM2, DMA_CCR_MSIZE_8BIT);
 #endif
-		dma_set_priority(DMA1, DMA_CHANNEL3, DMA_CCR_PL_HIGH);
+		dma_set_priority(DMA2, DMA_STREAM2, DMA_SxCR_PL_HIGH);
 	}
 
 	/* Enable dma transfer complete interrupts */
 	if (rx_len > 0) {
-		dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL2);
+		dma_enable_transfer_complete_interrupt(DMA2, DMA_STREAM0);
 	}
 	if (tx_len > 0) {
-		dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL3);
+		dma_enable_transfer_complete_interrupt(DMA2, DMA_STREAM2);
 	}
 
 	/* Activate dma channels */
 	if (rx_len > 0) {
-		dma_enable_channel(DMA1, DMA_CHANNEL2);
+		dma_enable_stream(DMA2, DMA_STREAM0);
 	}
 	if (tx_len > 0) {
-		dma_enable_channel(DMA1, DMA_CHANNEL3);
+		dma_enable_stream(DMA2, DMA_STREAM2);
 	}
 
 	/* Enable the spi transfer via dma
@@ -231,60 +225,58 @@ static int spi_dma_transceive(uint8_t *tx_buf, int tx_len, uint8_t *rx_buf, int 
 	 * receive dma will activate
 	 */
 	if (rx_len > 0) {
-    	spi_enable_rx_dma(SPI1);
-    }
-    if (tx_len > 0) {
-    	spi_enable_tx_dma(SPI1);
-    }
+	spi_enable_rx_dma(SPI1);
+	}
+	if (tx_len > 0) {
+		spi_enable_tx_dma(SPI1);
+	}
 
-    return 0;
+	return 0;
 }
 
 /* SPI receive completed with DMA */
-void dma1_channel2_isr(void)
+void dma2_stream0_isr(void)
 {
-	gpio_set(GPIOA,GPIO4);
-	if ((DMA1_ISR &DMA_ISR_TCIF2) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF2;
+	gpio_set(GPIOD,GPIO13);
+	if ((DMA2_LISR &DMA_LISR_TCIF3) != 0) {
+		DMA2_LIFCR |= DMA_LIFCR_CTCIF3;
 	}
 
-	dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL2);
+	dma_disable_transfer_complete_interrupt(DMA2, DMA_STREAM0);
 
 	spi_disable_rx_dma(SPI1);
 
-	dma_disable_channel(DMA1, DMA_CHANNEL2);
+	dma_disable_stream(DMA2, DMA_STREAM0);
 
 	/* Increment the status to indicate one of the transfers is complete */
 	transceive_status++;
-	gpio_clear(GPIOA,GPIO4);
+	gpio_clear(GPIOD,GPIO13);
 }
 
 /* SPI transmit completed with DMA */
-void dma1_channel3_isr(void)
+void dma2_stream2_isr(void)
 {
-	gpio_set(GPIOB,GPIO1);
-	if ((DMA1_ISR &DMA_ISR_TCIF3) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF3;
+	gpio_set(GPIOD,GPIO12);
+	if ((DMA2_LISR & DMA_LISR_TCIF2) != 0) {
+		DMA2_LIFCR |= DMA_LIFCR_CTCIF2;
 	}
 
-	dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL3);
+	dma_disable_transfer_complete_interrupt(DMA2, DMA_STREAM2);
 
 	spi_disable_tx_dma(SPI1);
 
-	dma_disable_channel(DMA1, DMA_CHANNEL3);
+	dma_disable_stream(DMA2, DMA_STREAM2);
 
 	/* Increment the status to indicate one of the transfers is complete */
 	transceive_status++;
-	gpio_clear(GPIOB,GPIO1);
+	gpio_clear(GPIOD,GPIO12);
 }
 
 static void usart_setup(void)
 {
 	/* Setup GPIO pin GPIO_USART2_TX and GPIO_USART2_RX. */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ,
-		      GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_TX);
-	gpio_set_mode(GPIOA, GPIO_MODE_INPUT,
-		      GPIO_CNF_INPUT_FLOAT, GPIO_USART2_RX);
+	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO2|GPIO3);
+	gpio_set_af(GPIOA, GPIO_AF7, GPIO2|GPIO3);
 
 	/* Setup UART parameters. */
 	usart_set_baudrate(USART2, 115200);
@@ -314,18 +306,11 @@ int _write(int file, char *ptr, int len)
 
 static void gpio_setup(void)
 {
-	/* Set GPIO8 (in GPIO port A) to 'output push-pull'. */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO8);
-
-	/* Use the extra pins to signal when the ISRs are running */
-	/* First, SPI1 - SS pin on Lisa/M v2.0 */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO4);
-	/* Then, SPI1 - DRDY pin on Lisa/M v2.0 */
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO1);
-
+	/* LED GPIOs. These are used as timing pins too */
+	gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO12);
+	gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO13);
+	gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO14);
+	gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO15);
 }
 
 int main(void)
@@ -363,7 +348,7 @@ int main(void)
 	/* Blink the LED (PA8) on the board with every transmitted byte. */
 	while (1) {
 		/* LED on/off */
-		gpio_toggle(GPIOA, GPIO8);
+		gpio_toggle(GPIOD, GPIO14);
 
 		/* Print what is going to be sent on the SPI bus */
 		printf("Sending  packet (tx len %02i):", counter_tx);

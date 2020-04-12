@@ -19,9 +19,7 @@
 
 BINARY = spi_dma
 
-# Comment the following line if you _don't_ have luftboot flashed!
-LDFLAGS += -Wl,-Ttext=0x8002000
-LDSCRIPT = ../lisa-m.ld
+DEVICE=STM32F411VE
 
 include ../../Makefile.include
 
